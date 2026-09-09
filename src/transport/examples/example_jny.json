@@ -1,0 +1,82 @@
+{
+  "jid": "2|#VN#1#ST#1788424467#PI#0#ZI#74919#TA#3#DA#40926#1S#591064#1T#1346#LS#591121#LT#1417#PU#81#RT#1#CA#obu#ZE#6#ZB#O-Bus 6 #PC#6#FR#591064#FT#1346#TO#591121#TT#1417#",
+  "date": "20260904",
+  "prodX": 11,
+  "dirTxt": "Parsch",
+  "dirFlg": "R",
+  "status": "P",
+  "isRchbl": true,
+  "stbStop": {
+    "locX": 0,
+    "idx": 15,
+    "dProdX": 11,
+    "dTimeS": "141000",
+    "dTimeR": "141000",
+    "dTimeFS": {
+      "styleX": 0
+    },
+    "dTimeFR": {
+      "styleX": 3,
+      "txtA": "pünktlich"
+    },
+    "dTimeFC": {
+      "styleX": 2
+    },
+    "dProgType": "PROGNOSED",
+    "dTZOffset": 120,
+    "type": "N"
+  },
+  "pos": {
+    "x": 13043995,
+    "y": 47813102
+  },
+  "msgL": [
+    {
+      "type": "REM",
+      "remX": 0,
+      "sty": "I",
+      "fLocX": 0,
+      "tLocX": 1,
+      "tagL": [
+        "SUM_CON_FTR_H3",
+        "RES_JNY_H3"
+      ],
+      "sort": 268435456
+    },
+    {
+      "type": "REM",
+      "remX": 1,
+      "sty": "I",
+      "fLocX": 0,
+      "tLocX": 1,
+      "tagL": [
+        "RES_JNY_DTL"
+      ],
+      "sort": 556531712
+    },
+    {
+      "type": "REM",
+      "remX": 2,
+      "sty": "I",
+      "fLocX": 0,
+      "tLocX": 1,
+      "tagL": [
+        "RES_JNY_DTL"
+      ],
+      "sort": 569638912
+    }
+  ],
+  "subscr": "F",
+  "prodL": [
+    {
+      "prodX": 11,
+      "fLocX": 0,
+      "tLocX": 1,
+      "fIdx": 15,
+      "tIdx": 20
+    }
+  ],
+  "sumLDrawStyleX": 0,
+  "resLDrawStyleX": 1,
+  "trainStartDate": "20260904"
+} 
