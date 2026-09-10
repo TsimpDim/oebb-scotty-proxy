@@ -1,5 +1,8 @@
 import os
 
+# Add the src/ directory to the Python path so the "transport" package resolves
+pythonpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src")
+
 # ASGI application path in pattern MODULE_NAME:VARIABLE_NAME
 wsgi_app = "transport.main:app"
 
@@ -11,7 +14,7 @@ workers = 1
 
 # The socket to bind
 #bind = "/run/gunicorn.sock"
-bind = "0.0.0.0:8000"
+bind = "0.0.0.0:4010"
 
 # Don't restart workers when code changes (development only!)
 reload = False
