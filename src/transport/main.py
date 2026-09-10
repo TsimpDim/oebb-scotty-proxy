@@ -2,9 +2,12 @@ from fastapi import FastAPI
 import requests as r
 from transport.scotty import STATIONS, BASE_URL, HEADERS
 from transport.utils import get_station_by_extid, get_payload, simplify_response
+from fastapi import Depends
+from transport.auth import handle_api_key
 
-app = FastAPI()
-
+app = FastAPI(dependencies=[
+    Depends(handle_api_key),
+])
 
 def dev() -> None:
     import uvicorn
