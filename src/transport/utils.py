@@ -301,7 +301,7 @@ def simplify_trip_response(response: dict) -> list:
 
 
 SALZBURG_VOLKSGARTEN = "Salzburg Volksgarten"
-SALZBURG_PARSCH = "Salzburg Parsch Bahnhst"
+SALZBURG_PARSCH = "Parsch Bahnhst"
 O_BUS_6 = "O-Bus 6"
 LONG_DISTANCE_CLASSES = {1, 2, 4}
 
@@ -324,11 +324,12 @@ def _main_leg(connection: dict) -> dict | None:
     return legs[-1] if legs else None
 
 
-def _starts_from(connection: dict, station: str) -> bool:
+def _starts_from(connection: dict, station_fragment: str) -> bool:
     first = _first_leg(connection)
     if not first:
         return False
-    return first.get("departure", {}).get("station") == station
+    name = first.get("departure", {}).get("station") or ""
+    return station_fragment in name
 
 
 def _is_obus6_from_volksgarten(connection: dict) -> bool:
@@ -355,8 +356,7 @@ def refine_connections(connections: list, reference_minutes: int | None = None) 
     """
     Filter, deduplicate and prioritize a list of trip connections.
 
-    - Removes connections starting from Salzburg Parsch Bahnhst.
-    - Keeps only one connection per destination line (long-distance rail
+    - Removes connections starting from Salzburg Parsch Bahnhst.    - Keeps only one connection per destination line (long-distance rail
       leg, falling back to the last leg).
     - Orders chronologically by departure, breaking ties in favour of
       connections starting with O-Bus 6 from Salzburg Volksgarten.
@@ -365,8 +365,10 @@ def refine_connections(connections: list, reference_minutes: int | None = None) 
         connections (list): Simplified connection dicts (with a
             'destination' label set).
         reference_minutes (int | None): Minutes since midnight of the
-            search reference time. Departures earlier than this are treated
-            as occurring the next day (midnight rollover).
+            search reference time. Departures more than 60 minutes earlier
+            than this are treated as occurring the next day (midnight
+            rollover); the buffer keeps slightly-past, still-catchable
+            connections on the correct day.
 
     Returns:
         list: The filtered, deduplicated and sorted connections.
@@ -387,7 +389,7 @@ def refine_connections(connections: list, reference_minutes: int | None = None) 
         departure = _departure_minutes(connection)
         if departure is None:
             departure = 10**9
-        elif reference_minutes is not None and departure < reference_minutes:
+        elif reference_minutes is not None and departure < reference_minutes - 60:
             departure += 24 * 60
         return (departure, 0 if _is_obus6_from_volksgarten(connection) else 1)
 

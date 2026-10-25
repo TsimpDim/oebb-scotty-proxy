@@ -43,6 +43,11 @@ def read_journeys_vienna(date: str | None = None, time: str | None = None):
     if not origin:
         return {"error": "Origin station not found."}
 
+    now = datetime.now()
+    search_date = date or now.strftime("%Y%m%d")
+    search_time = time or now.strftime("%H%M%S")
+    reference_minutes = int(search_time[:2]) * 60 + int(search_time[2:4])
+
     destinations = [
         get_station_by_extid("8103000"),   # Wien Hbf
         get_station_by_extid("8101003"),   # Wien Westbahnhof
@@ -56,7 +61,7 @@ def read_journeys_vienna(date: str | None = None, time: str | None = None):
         payload = get_journey_payload(
             origin["extId"], origin["name"],
             destination["extId"], destination["name"],
-            date, time,
+            search_date, search_time,
         )
         data = r.post(BASE_URL, json=payload, headers=HEADERS)
 
@@ -68,11 +73,5 @@ def read_journeys_vienna(date: str | None = None, time: str | None = None):
 
     if not connections:
         return {"error": "Failed to fetch data from the API."}
-
-    if time and len(time) >= 4 and time[:4].isdigit():
-        reference_minutes = int(time[:2]) * 60 + int(time[2:4])
-    else:
-        now = datetime.now()
-        reference_minutes = now.hour * 60 + now.minute
 
     return refine_connections(connections, reference_minutes)
