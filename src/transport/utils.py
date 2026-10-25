@@ -84,15 +84,15 @@ def simplify_response(response: dict) -> list:
 
     return simplified_journeys
 
-def get_trip_payload(
+def get_journey_payload(
     origin_extid: str,
     origin_name: str,
     dest_extid: str,
     dest_name: str,
     date: str | None = None,
     time: str | None = None,
-    num_f: int = 5,
-    max_chg: int = 3,
+    num_journeys: int = 10,
+    max_changes: int = 2,
 ) -> dict:
     """
     Generate a TripSearch payload between two stations.
@@ -104,7 +104,7 @@ def get_trip_payload(
         dest_name (str): Name of the destination station.
         date (str | None): Search date in YYYYMMDD format.
         time (str | None): Search time in HHMMSS format.
-        num_f (int): Maximum number of connections to return.
+        num_journeys (int): Maximum number of journeys to return.
         max_chg (int): Maximum number of transfers.
 
     Returns:
@@ -114,8 +114,8 @@ def get_trip_payload(
         "depLocL": [{"lid": f"A=1@O={origin_name}@L={origin_extid}@", "type": "S"}],
         "arrLocL": [{"lid": f"A=1@O={dest_name}@L={dest_extid}@", "type": "S"}],
         "outFrwd": True,
-        "numF": num_f,
-        "maxChg": max_chg,
+        "numF": num_journeys,
+        "maxChg": max_changes,
         "jnyFltrL": [{"type": "PROD", "mode": "INC", "value": "1023"}],
         "getPasslist": True,
         "getPolyline": False,
@@ -257,10 +257,12 @@ def _parse_leg(common: dict, section: dict) -> dict:
     """
     journey = section.get("jny", {})
     product = _resolve(common, "prodL", journey.get("prodX"))
+
     return {
         "departure": _stop_detail(common, section.get("dep", {}), "d"),
         "arrival": _stop_detail(common, section.get("arr", {}), "a"),
         "line": product.get("name") if product else None,
+        "cls": product.get("cls") if product else None,
         "category": (product.get("prodCtx") or {}).get("catOutL") if product else None,
         "direction": journey.get("dirTxt"),
         "status": journey.get("status"),
@@ -282,11 +284,111 @@ def simplify_trip_response(response: dict) -> list:
 
     connections = []
     for connection in res.get("outConL", []):
-        legs = [
-            _parse_leg(common, section)
-            for section in connection.get("secL", [])
-            if section.get("type") == "JNY"
-        ]
-        connections.append({"legs": legs})
+        legs = []
+        for section in connection.get("secL", []):
+            if section.get("type") == "JNY":
+                leg = _parse_leg(common, section)
+                if leg:
+                    legs.append(leg)
+        connections.append({
+            "departure": _stop_detail(common, connection.get("dep", {}), "d"),
+            "arrival": _stop_detail(common, connection.get("arr", {}), "a"),
+            "changes": connection.get("chg"),
+            "legs": legs,
+        })
 
     return connections
+
+
+SALZBURG_VOLKSGARTEN = "Salzburg Volksgarten"
+SALZBURG_PARSCH = "Salzburg Parsch Bahnhst"
+O_BUS_6 = "O-Bus 6"
+LONG_DISTANCE_CLASSES = {1, 2, 4}
+
+
+def _first_leg(connection: dict) -> dict | None:
+    legs = connection.get("legs", [])
+    return legs[0] if legs else None
+
+
+def _main_leg(connection: dict) -> dict | None:
+    """
+    Return the long-distance rail leg of a connection.
+
+    Falls back to the last leg when no intercity/railjet leg is present.
+    """
+    legs = connection.get("legs", [])
+    for leg in legs:
+        if leg.get("cls") in LONG_DISTANCE_CLASSES:
+            return leg
+    return legs[-1] if legs else None
+
+
+def _starts_from(connection: dict, station: str) -> bool:
+    first = _first_leg(connection)
+    if not first:
+        return False
+    return first.get("departure", {}).get("station") == station
+
+
+def _is_obus6_from_volksgarten(connection: dict) -> bool:
+    first = _first_leg(connection)
+    if not first:
+        return False
+    return (
+        first.get("departure", {}).get("station") == SALZBURG_VOLKSGARTEN
+        and first.get("line") == O_BUS_6
+    )
+
+
+def _departure_minutes(connection: dict) -> int | None:
+    time_str = (connection.get("departure") or {}).get("predicted_time")
+    if not time_str or ":" not in time_str:
+        return None
+    hours, minutes = time_str.split(":", 1)
+    if not hours.isdigit() or not minutes.isdigit():
+        return None
+    return int(hours) * 60 + int(minutes)
+
+
+def refine_connections(connections: list, reference_minutes: int | None = None) -> list:
+    """
+    Filter, deduplicate and prioritize a list of trip connections.
+
+    - Removes connections starting from Salzburg Parsch Bahnhst.
+    - Keeps only one connection per destination line (long-distance rail
+      leg, falling back to the last leg).
+    - Orders chronologically by departure, breaking ties in favour of
+      connections starting with O-Bus 6 from Salzburg Volksgarten.
+
+    Args:
+        connections (list): Simplified connection dicts (with a
+            'destination' label set).
+        reference_minutes (int | None): Minutes since midnight of the
+            search reference time. Departures earlier than this are treated
+            as occurring the next day (midnight rollover).
+
+    Returns:
+        list: The filtered, deduplicated and sorted connections.
+    """
+    filtered = [c for c in connections if not _starts_from(c, SALZBURG_PARSCH)]
+
+    seen = set()
+    deduped = []
+    for connection in filtered:
+        main = _main_leg(connection)
+        key = (connection.get("destination"), main.get("line") if main else None)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(connection)
+
+    def sort_key(connection: dict) -> tuple:
+        departure = _departure_minutes(connection)
+        if departure is None:
+            departure = 10**9
+        elif reference_minutes is not None and departure < reference_minutes:
+            departure += 24 * 60
+        return (departure, 0 if _is_obus6_from_volksgarten(connection) else 1)
+
+    return sorted(deduped, key=sort_key)
