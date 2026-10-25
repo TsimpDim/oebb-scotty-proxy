@@ -35,4 +35,5 @@ HEADERS = {
 
 STATIONS =  [
     {"name": "Salzburg Volksgarten", "extId": "591161", "city": "Salzburg"},
+    {"name": "Wien Hbf", "extId": "8103000", "city": "Wien"},
 ]

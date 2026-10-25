@@ -83,3 +83,210 @@ def simplify_response(response: dict) -> list:
         simplified_journeys.append(simplified_journey)
 
     return simplified_journeys
+
+def get_trip_payload(
+    origin_extid: str,
+    origin_name: str,
+    dest_extid: str,
+    dest_name: str,
+    date: str | None = None,
+    time: str | None = None,
+    num_f: int = 5,
+    max_chg: int = 3,
+) -> dict:
+    """
+    Generate a TripSearch payload between two stations.
+
+    Args:
+        origin_extid (str): External ID of the origin station.
+        origin_name (str): Name of the origin station.
+        dest_extid (str): External ID of the destination station.
+        dest_name (str): Name of the destination station.
+        date (str | None): Search date in YYYYMMDD format.
+        time (str | None): Search time in HHMMSS format.
+        num_f (int): Maximum number of connections to return.
+        max_chg (int): Maximum number of transfers.
+
+    Returns:
+        dict: A dictionary representing the TripSearch payload.
+    """
+    req = {
+        "depLocL": [{"lid": f"A=1@O={origin_name}@L={origin_extid}@", "type": "S"}],
+        "arrLocL": [{"lid": f"A=1@O={dest_name}@L={dest_extid}@", "type": "S"}],
+        "outFrwd": True,
+        "numF": num_f,
+        "maxChg": max_chg,
+        "jnyFltrL": [{"type": "PROD", "mode": "INC", "value": "1023"}],
+        "getPasslist": True,
+        "getPolyline": False,
+        "getPT": True,
+        "getIV": False,
+    }
+    if date:
+        req["outDate"] = date
+    if time:
+        req["outTime"] = time
+
+    payload = BASE_PAYLOAD.copy()
+    payload["svcReqL"] = [{"meth": "TripSearch", "req": req}]
+    return payload
+
+def _resolve(common: dict, key: str, index: int | None) -> dict | None:
+    """
+    Resolve an entry from a common reference list by index.
+
+    Args:
+        common (dict): The common reference tables from the API response.
+        key (str): The list key to look up (e.g. 'locL', 'prodL').
+        index (int | None): The index into the list.
+
+    Returns:
+        dict | None: The resolved entry, or None if out of range.
+    """
+    entries = common.get(key, [])
+    if index is None or not isinstance(index, int):
+        return None
+    if 0 <= index < len(entries):
+        return entries[index]
+    return None
+
+def _delay_minutes(scheduled: str | None, realtime: str | None) -> int | None:
+    """
+    Compute the delay in minutes between scheduled and realtime HHMMSS times.
+
+    Args:
+        scheduled (str | None): Scheduled time in HHMMSS format.
+        realtime (str | None): Realtime time in HHMMSS format.
+
+    Returns:
+        int | None: The delay in minutes, or None if times are missing.
+    """
+    if not scheduled or not realtime or not scheduled.isdigit() or not realtime.isdigit():
+        return None
+    if len(scheduled) < 6 or len(realtime) < 6:
+        return None
+    scheduled_sec = int(scheduled[:2]) * 3600 + int(scheduled[2:4]) * 60 + int(scheduled[4:6])
+    realtime_sec = int(realtime[:2]) * 3600 + int(realtime[2:4]) * 60 + int(realtime[4:6])
+    return (realtime_sec - scheduled_sec) // 60
+
+def _format_duration(duration: str | None) -> str | None:
+    """
+    Format a duration string from 'HHMMSS' to 'hh:mm:ss'.
+
+    Args:
+        duration (str | None): The duration in HHMMSS format.
+
+    Returns:
+        str | None: The formatted duration, or None if missing/invalid.
+    """
+    if not duration or not duration.isdigit() or len(duration) < 6:
+        return duration
+    return f"{duration[:2]}:{duration[2:4]}:{duration[4:6]}"
+
+def _platform(stop: dict, prefix: str) -> str | None:
+    """
+    Extract the platform text from a stop object.
+
+    Args:
+        stop (dict): A stop object from the API response.
+        prefix (str): 'd' for departure or 'a' for arrival.
+
+    Returns:
+        str | None: The platform text, or None if not present.
+    """
+    for key in (f"{prefix}PltfS", f"{prefix}PltfR", f"{prefix}PlatfS", f"{prefix}PlatfR"):
+        value = stop.get(key)
+        if isinstance(value, dict) and value.get("txt"):
+            return value["txt"]
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+def _time_detail(scheduled: str | None, realtime: str | None, platform: str | None) -> dict:
+    """
+    Build a time detail dict with planned/realtime times and delay info.
+
+    Args:
+        scheduled (str | None): Scheduled time in HHMMSS format.
+        realtime (str | None): Realtime time in HHMMSS format.
+        platform (str | None): Platform text.
+
+    Returns:
+        dict: A dictionary with formatted times, platform, and delay info.
+    """
+    realtime = realtime or scheduled
+    return {
+        "planned_time": format_time(scheduled) if scheduled else None,
+        "predicted_time": format_time(realtime) if realtime else None,
+        "platform": platform,
+        "delayed": bool(scheduled and realtime and scheduled != realtime),
+        "delay_minutes": _delay_minutes(scheduled, realtime),
+    }
+
+def _stop_detail(common: dict, stop: dict, prefix: str) -> dict:
+    """
+    Build a station and time detail dict for a departure or arrival stop.
+
+    Args:
+        common (dict): The common reference tables from the API response.
+        stop (dict): A stop object from the API response.
+        prefix (str): 'd' for departure or 'a' for arrival.
+
+    Returns:
+        dict: A dictionary with station info and time details.
+    """
+    loc = _resolve(common, "locL", stop.get("locX"))
+    scheduled = stop.get(f"{prefix}TimeS")
+    realtime = stop.get(f"{prefix}TimeR", scheduled)
+    detail = {
+        "station": loc.get("name") if loc else None,
+    }
+    detail.update(_time_detail(scheduled, realtime, _platform(stop, prefix)))
+    return detail
+
+def _parse_leg(common: dict, section: dict) -> dict:
+    """
+    Parse a single journey (JNY) leg of a connection.
+
+    Args:
+        common (dict): The common reference tables from the API response.
+        section (dict): A section entry from the connection's secL list.
+
+    Returns:
+        dict: A dictionary representing a simplified leg.
+    """
+    journey = section.get("jny", {})
+    product = _resolve(common, "prodL", journey.get("prodX"))
+    return {
+        "departure": _stop_detail(common, section.get("dep", {}), "d"),
+        "arrival": _stop_detail(common, section.get("arr", {}), "a"),
+        "line": product.get("name") if product else None,
+        "category": (product.get("prodCtx") or {}).get("catOutL") if product else None,
+        "direction": journey.get("dirTxt"),
+        "status": journey.get("status"),
+        "duration": _format_duration(journey.get("durS")),
+    }
+
+def simplify_trip_response(response: dict) -> list:
+    """
+    Simplify a TripSearch API response into connections with legs.
+
+    Args:
+        response (dict): The raw response from the API.
+
+    Returns:
+        list: A list of simplified connection dictionaries.
+    """
+    res = response.get("svcResL", [{}])[0].get("res", {})
+    common = res.get("common", {})
+
+    connections = []
+    for connection in res.get("outConL", []):
+        legs = [
+            _parse_leg(common, section)
+            for section in connection.get("secL", [])
+            if section.get("type") == "JNY"
+        ]
+        connections.append({"legs": legs})
+
+    return connections
