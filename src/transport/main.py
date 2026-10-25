@@ -50,7 +50,6 @@ def read_journeys_vienna(date: str | None = None, time: str | None = None):
 
     destinations = [
         get_station_by_extid("8103000"),   # Wien Hbf
-        get_station_by_extid("8101003"),   # Wien Westbahnhof
     ]
     destinations = [d for d in destinations if d]
     if not destinations:
