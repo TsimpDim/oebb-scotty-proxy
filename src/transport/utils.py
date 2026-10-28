@@ -75,8 +75,49 @@ def get_journey_payload(
     dest_name: str,
     date: str | None = None,
     time: str | None = None,
-    num_journeys: int = 20,
+    num_journeys: int = 30,
     max_changes: int = 2,
+) -> dict:
+    """
+    Generate a TripSearch payload between two stations.
+    """
+    return _build_tripsearch_payload(
+        origin_extid, origin_name, dest_extid, dest_name,
+        date, time, num_journeys, max_changes,
+    )
+
+
+def get_scroll_payload(
+    origin_extid: str,
+    origin_name: str,
+    dest_extid: str,
+    dest_name: str,
+    scroll_ctx: str,
+    date: str | None = None,
+    time: str | None = None,
+    num_journeys: int = 30,
+    max_changes: int = 2,
+) -> dict:
+    """
+    Generate a TripSearch payload with a scroll context for pagination.
+    """
+    return _build_tripsearch_payload(
+        origin_extid, origin_name, dest_extid, dest_name,
+        date, time, num_journeys, max_changes,
+        scroll_ctx=scroll_ctx,
+    )
+
+
+def _build_tripsearch_payload(
+    origin_extid: str,
+    origin_name: str,
+    dest_extid: str,
+    dest_name: str,
+    date: str | None = None,
+    time: str | None = None,
+    num_journeys: int = 30,
+    max_changes: int = 2,
+    scroll_ctx: str | None = None,
 ) -> dict:
     """
     Generate a TripSearch payload between two stations.
@@ -90,6 +131,7 @@ def get_journey_payload(
         time (str | None): Search time in HHMMSS format.
         num_journeys (int): Maximum number of journeys to return.
         max_chg (int): Maximum number of transfers.
+        scroll_ctx (str | None): Pagination token from a previous response.
 
     Returns:
         dict: A dictionary representing the TripSearch payload.
@@ -101,7 +143,7 @@ def get_journey_payload(
         "numF": num_journeys,
         "maxChg": max_changes,
         "jnyFltrL": [{"type": "PROD", "mode": "INC", "value": "1023"}],
-        "getPasslist": True,
+        "getPasslist": False,
         "getPolyline": False,
         "getPT": True,
         "getIV": False,
@@ -111,8 +153,12 @@ def get_journey_payload(
     if time:
         req["outTime"] = time
 
+    if scroll_ctx:
+        req["ctxScr"] = scroll_ctx
+
     payload = BASE_PAYLOAD.copy()
     payload["svcReqL"] = [{"meth": "TripSearch", "req": req}]
+
     return payload
 
 def _resolve_train_bus_or_stop(common: dict, key: str, index: int | None) -> dict | None:
@@ -277,6 +323,63 @@ def _parse_leg(common: dict, section: dict) -> dict:
         "duration": _format_duration(journey.get("durS")),
     }
 
+def fetch_trips_with_scroll(requests, base_url: str, headers: dict, payload: dict, min_connections: int = 15) -> dict:
+    """
+    Fetch TripSearch results, paginating with scroll context until we have
+    enough raw connections or no more pages.
+    """
+    all_connections = []
+    last_response = None
+    scroll_ctx = None
+    max_pages = 6
+
+    # Preserve internal keys for use in scroll requests
+    meta = {
+        "origin_extid": payload.get("_origin_extid"),
+        "origin_name": payload.get("_origin_name"),
+        "dest_extid": payload.get("_dest_extid"),
+        "dest_name": payload.get("_dest_name"),
+        "date": payload.get("_date"),
+        "time": payload.get("_time"),
+    }
+
+    for page in range(max_pages):
+        if scroll_ctx:
+            payload = get_scroll_payload(
+                meta["origin_extid"],
+                meta["origin_name"],
+                meta["dest_extid"],
+                meta["dest_name"],
+                scroll_ctx=scroll_ctx,
+                date=meta["date"],
+                time=meta["time"],
+                num_journeys=30,
+                max_changes=2,
+            )
+
+        api_payload = {k: v for k, v in payload.items() if not k.startswith("_")}
+        data = requests.post(base_url, json=api_payload, headers=headers)
+        if data.status_code != 200:
+            break
+
+        response = data.json()
+        last_response = response
+        svc_res = response.get("svcResL", [])
+        if svc_res:
+            res = svc_res[0].get("res", {})
+            connections = res.get("outConL", [])
+            all_connections.extend(connections)
+            scroll_ctx = res.get("outCtxScrB")
+
+        if not scroll_ctx or len(all_connections) >= min_connections:
+            break
+
+    if last_response and all_connections:
+        last_response["svcResL"][0]["res"]["outConL"] = all_connections
+
+    return last_response
+
+
 def simplify_trip_response(response: dict) -> list:
     """
     Simplify a TripSearch API response into connections with legs.
@@ -402,8 +505,8 @@ def refine_connections(connections: list, reference_minutes: int | None = None) 
     for connection in filtered:
         main = _leg_is_train(connection)
 
-        # Use the line of the long-distance leg (or last leg) and planned_time as the deduplication key
-        key = (connection.get("destination"), main.get("line"), main.get('planned_time') if main else None)
+        main_dep = main.get("departure", {}).get("planned_time") if main else None
+        key = (connection.get("destination"), main.get("line"), main_dep)
 
         # Skip duplicate connections for the same destination and line
         # so if a journey with RX123 has been processed already, only show it once

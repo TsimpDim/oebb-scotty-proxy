@@ -2,7 +2,7 @@ from fastapi import FastAPI
 import requests as r
 from datetime import datetime
 from transport.scotty import STATIONS, BASE_URL, HEADERS
-from transport.utils import get_payload, simplify_response, get_journey_payload, simplify_trip_response, refine_connections
+from transport.utils import get_payload, simplify_response, get_journey_payload, simplify_trip_response, refine_connections, fetch_trips_with_scroll
 from fastapi import Depends
 from transport.auth import handle_api_key
 
@@ -62,11 +62,21 @@ def read_journeys_vienna(date: str | None = None, time: str | None = None):
             destination["extId"], destination["name"],
             search_date, search_time,
         )
-        data = r.post(BASE_URL, json=payload, headers=HEADERS)
+        payload["_origin_extid"] = origin["extId"]
+        payload["_origin_name"] = origin["name"]
+        payload["_dest_extid"] = destination["extId"]
+        payload["_dest_name"] = destination["name"]
+        payload["_date"] = search_date
+        payload["_time"] = search_time
 
-        if data.status_code != 200:
+        response = fetch_trips_with_scroll(r, BASE_URL, HEADERS, payload, min_connections=30)
+
+        if not response or response.get("err") != "OK":
             continue
-        for connection in simplify_trip_response(data.json()):
+        svc_res = response.get("svcResL", [{}])[0]
+        if svc_res.get("err") != "OK":
+            continue
+        for connection in simplify_trip_response(response):
             connection["destination"] = destination["name"]
             connections.append(connection)
 

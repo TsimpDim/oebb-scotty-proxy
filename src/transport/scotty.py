@@ -22,7 +22,7 @@ BASE_PAYLOAD = {
                     "name": "$station_name$",
                     "extId": "$station_id$",
                 },
-                "maxJny": 10,
+                "maxJny": 40,
             },
         }
     ],
