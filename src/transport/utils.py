@@ -1,4 +1,4 @@
-from transport.scotty import BASE_PAYLOAD
+from transport.scotty import BASE_PAYLOAD, STATIONS
 import re
 
 def get_payload(station_id: str, station_name: str) -> dict:
@@ -475,6 +475,28 @@ def _departure_minutes(connection: dict) -> int | None:
     return int(hours) * 60 + int(minutes)
 
 
+def filter_journeys_by_window(connections: list, now_minutes: int, hours: int = 5) -> list:
+    """
+    Keep only connections departing between `now_minutes` and
+    `now_minutes + hours * 60` minutes since midnight.
+
+    Departures earlier in the day than `now_minutes` are treated as the
+    next day (midnight rollover).
+    """
+    end_minutes = now_minutes + hours * 60
+    filtered = []
+    for connection in connections:
+        departure = _departure_minutes(connection)
+        if departure is None:
+            filtered.append(connection)
+            continue
+        if departure < now_minutes:
+            departure += 24 * 60
+        if now_minutes <= departure < end_minutes:
+            filtered.append(connection)
+    return filtered
+
+
 def refine_connections(connections: list, reference_minutes: int | None = None) -> list:
     """
     Filter, deduplicate and prioritize a list of trip connections.
@@ -524,3 +546,46 @@ def refine_connections(connections: list, reference_minutes: int | None = None) 
         return (departure, 0 if _is_obus6_from_volksgarten(connection) else 1)
 
     return sorted(deduped, key=sort_key)
+
+
+def fetch_vienna_journeys(requests, base_url: str, headers: dict, search_date: str, search_time: str) -> list:
+    """
+    Fetch and refine upcoming journeys from Salzburg Volksgarten to Wien Hbf.
+
+    Returns a list of simplified connections, or an empty list on failure.
+    """
+    origin = STATIONS.get("591161")
+    destination = STATIONS.get("8103000")
+    if not origin or not destination:
+        return []
+
+    reference_minutes = int(search_time[:2]) * 60 + int(search_time[2:4])
+
+    payload = get_journey_payload(
+        origin["extId"], origin["name"],
+        destination["extId"], destination["name"],
+        search_date, search_time,
+    )
+    payload["_origin_extid"] = origin["extId"]
+    payload["_origin_name"] = origin["name"]
+    payload["_dest_extid"] = destination["extId"]
+    payload["_dest_name"] = destination["name"]
+    payload["_date"] = search_date
+    payload["_time"] = search_time
+
+    response = fetch_trips_with_scroll(requests, base_url, headers, payload, min_connections=30)
+    if not response or response.get("err") != "OK":
+        return []
+    svc_res = response.get("svcResL", [{}])[0]
+    if svc_res.get("err") != "OK":
+        return []
+
+    connections = []
+    for connection in simplify_trip_response(response):
+        connection["destination"] = destination["name"]
+        connections.append(connection)
+
+    if not connections:
+        return []
+
+    return refine_connections(connections, reference_minutes)
