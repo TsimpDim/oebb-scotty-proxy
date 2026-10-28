@@ -358,7 +358,7 @@ def fetch_trips_with_scroll(requests, base_url: str, headers: dict, payload: dic
             )
 
         api_payload = {k: v for k, v in payload.items() if not k.startswith("_")}
-        data = requests.post(base_url, json=api_payload, headers=headers)
+        data = requests.post(base_url, json=api_payload, headers=headers, timeout=10)
         if data.status_code != 200:
             break
 
