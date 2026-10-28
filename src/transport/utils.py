@@ -115,7 +115,7 @@ def _build_tripsearch_payload(
     dest_name: str,
     date: str | None = None,
     time: str | None = None,
-    num_journeys: int = 30,
+    num_journeys: int = 20,
     max_changes: int = 2,
     scroll_ctx: str | None = None,
 ) -> dict:
