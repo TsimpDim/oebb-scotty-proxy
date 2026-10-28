@@ -22,7 +22,7 @@ BASE_PAYLOAD = {
                     "name": "$station_name$",
                     "extId": "$station_id$",
                 },
-                "maxJny": 15,
+                "maxJny": 10,
             },
         }
     ],
@@ -33,7 +33,7 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
 }
 
-STATIONS =  [
-    {"name": "Salzburg Volksgarten", "extId": "591161", "city": "Salzburg"},
-    {"name": "Wien Hbf", "extId": "8103000", "city": "Wien"},
-]
+STATIONS =  {
+    "591161": {"name": "Salzburg Volksgarten", "extId": "591161", "city": "Salzburg"},
+    "8103000": {"name": "Wien Hbf", "extId": "8103000", "city": "Wien"},
+}

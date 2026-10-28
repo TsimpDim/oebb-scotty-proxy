@@ -2,7 +2,7 @@ from fastapi import FastAPI
 import requests as r
 from datetime import datetime
 from transport.scotty import STATIONS, BASE_URL, HEADERS
-from transport.utils import get_station_by_extid, get_payload, simplify_response, get_journey_payload, simplify_trip_response, refine_connections
+from transport.utils import get_payload, simplify_response, get_journey_payload, simplify_trip_response, refine_connections
 from fastapi import Depends
 from transport.auth import handle_api_key
 
@@ -21,7 +21,7 @@ def read_stations():
 
 @app.get("/stations/{station_id}")
 def read_station(station_id: str):
-    station = get_station_by_extid(station_id)
+    station = STATIONS.get(station_id)
     payload = get_payload(station['extId'], station["name"]) if station else None
     if payload:
         data = r.post(
@@ -39,7 +39,7 @@ def read_station(station_id: str):
 
 @app.get("/journeys/vienna")
 def read_journeys_vienna(date: str | None = None, time: str | None = None):
-    origin = get_station_by_extid("591161")
+    origin = STATIONS.get("591161")
     if not origin:
         return {"error": "Origin station not found."}
 
@@ -49,7 +49,7 @@ def read_journeys_vienna(date: str | None = None, time: str | None = None):
     reference_minutes = int(search_time[:2]) * 60 + int(search_time[2:4])
 
     destinations = [
-        get_station_by_extid("8103000"),   # Wien Hbf
+        STATIONS.get("8103000")   # Wien Hbf
     ]
     destinations = [d for d in destinations if d]
     if not destinations:

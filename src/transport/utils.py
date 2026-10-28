@@ -1,21 +1,5 @@
-from transport.scotty import BASE_PAYLOAD, STATIONS
+from transport.scotty import BASE_PAYLOAD
 import re
-
-def get_station_by_extid(station_id: str) -> dict:
-    """
-    Retrieve station information based on the external ID.
-
-    Args:
-        station_id (str): The external ID of the station.
-
-    Returns:
-        dict: A dictionary containing the station's name and city.
-              Returns None if the station is not found.
-    """
-    for station in STATIONS:
-        if station["extId"] == station_id:
-            return station
-    return None
 
 def get_payload(station_id: str, station_name: str) -> dict:
     """
@@ -33,7 +17,7 @@ def get_payload(station_id: str, station_name: str) -> dict:
     payload["svcReqL"][0]["req"]["stbLoc"]["name"] = station_name
     return payload
 
-def format_time(time_str: str) -> str:
+def format_time_hh_mm(time_str: str) -> str:
     """
     Format a time string from 'HHMM' to 'HH:MM'.
 
@@ -73,13 +57,13 @@ def simplify_response(response: dict) -> list:
         planned_time_raw = stop_data['dTimeS']
         predicted_time_raw = stop_data.get('dTimeR', planned_time_raw)
 
-        simplified_journey['planned_time'] = format_time(planned_time_raw)
-        simplified_journey['predicted_time'] = format_time(predicted_time_raw)
+        simplified_journey['planned_time'] = format_time_hh_mm(planned_time_raw)
+        simplified_journey['predicted_time'] = format_time_hh_mm(predicted_time_raw)
         simplified_journey['direction'] = "Outbound" if journey.get("dirFlg", "") == 'H' else "Inbound"
         simplified_journey['loc_x'] = journey.get('pos', {'x': None})['x']
         simplified_journey['loc_y'] = journey.get('pos', {'y': None})['y']
         simplified_journey['delayed'] = planned_time_raw != predicted_time_raw
-        simplified_journey['delay_minutes'] = (int(predicted_time_raw) - int(planned_time_raw))/100
+        simplified_journey['delay_minutes'] = _get_delay_in_minutes(planned_time_raw, predicted_time_raw)
         simplified_journeys.append(simplified_journey)
 
     return simplified_journeys
@@ -91,7 +75,7 @@ def get_journey_payload(
     dest_name: str,
     date: str | None = None,
     time: str | None = None,
-    num_journeys: int = 10,
+    num_journeys: int = 20,
     max_changes: int = 2,
 ) -> dict:
     """
@@ -131,7 +115,7 @@ def get_journey_payload(
     payload["svcReqL"] = [{"meth": "TripSearch", "req": req}]
     return payload
 
-def _resolve(common: dict, key: str, index: int | None) -> dict | None:
+def _resolve_train_bus_or_stop(common: dict, key: str, index: int | None) -> dict | None:
     """
     Resolve an entry from a common reference list by index.
 
@@ -150,7 +134,7 @@ def _resolve(common: dict, key: str, index: int | None) -> dict | None:
         return entries[index]
     return None
 
-def _delay_minutes(scheduled: str | None, realtime: str | None) -> int | None:
+def _get_delay_in_minutes(scheduled: str | None, realtime: str | None) -> int | None:
     """
     Compute the delay in minutes between scheduled and realtime HHMMSS times.
 
@@ -183,7 +167,7 @@ def _format_duration(duration: str | None) -> str | None:
         return duration
     return f"{duration[:2]}:{duration[2:4]}:{duration[4:6]}"
 
-def _platform(stop: dict, prefix: str) -> str | None:
+def _get_platform_detail_dict(stop: dict, prefix: str) -> str | None:
     """
     Extract the platform text from a stop object.
 
@@ -202,7 +186,7 @@ def _platform(stop: dict, prefix: str) -> str | None:
             return value
     return None
 
-def _time_detail(scheduled: str | None, realtime: str | None, platform: str | None) -> dict:
+def _get_time_detail_dict(scheduled: str | None, realtime: str | None, platform: str | None) -> dict:
     """
     Build a time detail dict with planned/realtime times and delay info.
 
@@ -216,14 +200,14 @@ def _time_detail(scheduled: str | None, realtime: str | None, platform: str | No
     """
     realtime = realtime or scheduled
     return {
-        "planned_time": format_time(scheduled) if scheduled else None,
-        "predicted_time": format_time(realtime) if realtime else None,
+        "planned_time": format_time_hh_mm(scheduled) if scheduled else None,
+        "predicted_time": format_time_hh_mm(realtime) if realtime else None,
         "platform": platform,
         "delayed": bool(scheduled and realtime and scheduled != realtime),
-        "delay_minutes": _delay_minutes(scheduled, realtime),
+        "delay_minutes": _get_delay_in_minutes(scheduled, realtime),
     }
 
-def _stop_detail(common: dict, stop: dict, prefix: str) -> dict:
+def _get_stop_detail_dict(common: dict, stop: dict, prefix: str) -> dict:
     """
     Build a station and time detail dict for a departure or arrival stop.
 
@@ -235,13 +219,34 @@ def _stop_detail(common: dict, stop: dict, prefix: str) -> dict:
     Returns:
         dict: A dictionary with station info and time details.
     """
-    loc = _resolve(common, "locL", stop.get("locX"))
+
+    # The 'locX' field in the stop references an index into the 'locL' list in 'common'.
+    # locL contains location entries, which may be stations, stops, etc.
+    # locL contains:
+    #   "lid": "A=1@O=Salzburg Volksgarten@X=13061632@Y=47798773@U=81@L=591161@",
+    #   "type": "S",
+    #   "name": "Salzburg Volksgarten",
+    #   "icoX": 0,
+    #   "extId": "591161",
+    #   "state": "F",
+    #   "crd": {
+    #     "x": 13061632,
+    #     "y": 47798773,
+    #     "floor": 0
+    #   },
+    #   "pCls": 2112,
+    #   "chgTime": "000500",
+    #   "countryCodeL": [
+    #     "at"
+    #   ]
+    loc = _resolve_train_bus_or_stop(common, "locL", stop.get("locX"))
+
     scheduled = stop.get(f"{prefix}TimeS")
     realtime = stop.get(f"{prefix}TimeR", scheduled)
     detail = {
         "station": loc.get("name") if loc else None,
     }
-    detail.update(_time_detail(scheduled, realtime, _platform(stop, prefix)))
+    detail.update(_get_time_detail_dict(scheduled, realtime, _get_platform_detail_dict(stop, prefix)))
     return detail
 
 def _parse_leg(common: dict, section: dict) -> dict:
@@ -256,11 +261,14 @@ def _parse_leg(common: dict, section: dict) -> dict:
         dict: A dictionary representing a simplified leg.
     """
     journey = section.get("jny", {})
-    product = _resolve(common, "prodL", journey.get("prodX"))
+    
+    # The 'prodX' field in the journey references an index into the 'prodL' list in 'common'.
+    # By doing common.prodL[prodX] we know what product (train/bus type) this leg is.
+    product = _resolve_train_bus_or_stop(common, "prodL", journey.get("prodX"))
 
     return {
-        "departure": _stop_detail(common, section.get("dep", {}), "d"),
-        "arrival": _stop_detail(common, section.get("arr", {}), "a"),
+        "departure": _get_stop_detail_dict(common, section.get("dep", {}), "d"),
+        "arrival": _get_stop_detail_dict(common, section.get("arr", {}), "a"),
         "line": product.get("name") if product else None,
         "cls": product.get("cls") if product else None,
         "category": (product.get("prodCtx") or {}).get("catOutL") if product else None,
@@ -279,20 +287,29 @@ def simplify_trip_response(response: dict) -> list:
     Returns:
         list: A list of simplified connection dictionaries.
     """
+    #svcResL is a top-level object that contains multiple responses (res)
+    # 'res' contains stuff life 'common', 'outConL' (list of connections), outCtxScrB, etc.
     res = response.get("svcResL", [{}])[0].get("res", {})
+
+    # The 'common' object contains reference tables for locations, products, etc.
+    # Specifically 'locL' for locations, 'prodL' for products, 'opL' for operators, 'remL' for remarks, etc.
     common = res.get("common", {})
 
+    # outConL.secL is a list of sections, each of which may be a leg (JNY) or a footpath (WALK)
     connections = []
     for connection in res.get("outConL", []):
         legs = []
         for section in connection.get("secL", []):
+            # We want to explicitly exclude WALK sections, so we only parse JNY ones
+            # and add them to a new "legs" list in the simplified connection dict.
             if section.get("type") == "JNY":
                 leg = _parse_leg(common, section)
                 if leg:
                     legs.append(leg)
+
         connections.append({
-            "departure": _stop_detail(common, connection.get("dep", {}), "d"),
-            "arrival": _stop_detail(common, connection.get("arr", {}), "a"),
+            "departure": _get_stop_detail_dict(common, connection.get("dep", {}), "d"),
+            "arrival": _get_stop_detail_dict(common, connection.get("arr", {}), "a"),
             "changes": connection.get("chg"),
             "legs": legs,
         })
@@ -303,15 +320,17 @@ def simplify_trip_response(response: dict) -> list:
 SALZBURG_VOLKSGARTEN = "Salzburg Volksgarten"
 SALZBURG_PARSCH = "Parsch Bahnhst"
 O_BUS_6 = "O-Bus 6"
+
+# 1 = first class, 2 = second class, 4 = railjet, 6 = intercity
 LONG_DISTANCE_CLASSES = {1, 2, 4}
 
 
-def _first_leg(connection: dict) -> dict | None:
+def _get_first_leg(connection: dict) -> dict | None:
     legs = connection.get("legs", [])
     return legs[0] if legs else None
 
 
-def _main_leg(connection: dict) -> dict | None:
+def _leg_is_train(connection: dict) -> dict | None:
     """
     Return the long-distance rail leg of a connection.
 
@@ -319,13 +338,14 @@ def _main_leg(connection: dict) -> dict | None:
     """
     legs = connection.get("legs", [])
     for leg in legs:
+        # cls = class of service
         if leg.get("cls") in LONG_DISTANCE_CLASSES:
             return leg
     return legs[-1] if legs else None
 
 
-def _starts_from(connection: dict, station_fragment: str) -> bool:
-    first = _first_leg(connection)
+def _connection_starts_from(connection: dict, station_fragment: str) -> bool:
+    first = _get_first_leg(connection)
     if not first:
         return False
     name = first.get("departure", {}).get("station") or ""
@@ -333,7 +353,7 @@ def _starts_from(connection: dict, station_fragment: str) -> bool:
 
 
 def _is_obus6_from_volksgarten(connection: dict) -> bool:
-    first = _first_leg(connection)
+    first = _get_first_leg(connection)
     if not first:
         return False
     return (
@@ -373,13 +393,20 @@ def refine_connections(connections: list, reference_minutes: int | None = None) 
     Returns:
         list: The filtered, deduplicated and sorted connections.
     """
-    filtered = [c for c in connections if not _starts_from(c, SALZBURG_PARSCH)]
+
+    # Filter out connections starting from Salzburg Parsch Bahnhst
+    filtered = [c for c in connections if not _connection_starts_from(c, SALZBURG_PARSCH)]
 
     seen = set()
     deduped = []
     for connection in filtered:
-        main = _main_leg(connection)
-        key = (connection.get("destination"), main.get("line") if main else None)
+        main = _leg_is_train(connection)
+
+        # Use the line of the long-distance leg (or last leg) and planned_time as the deduplication key
+        key = (connection.get("destination"), main.get("line"), main.get('planned_time') if main else None)
+
+        # Skip duplicate connections for the same destination and line
+        # so if a journey with RX123 has been processed already, only show it once
         if key in seen:
             continue
         seen.add(key)
