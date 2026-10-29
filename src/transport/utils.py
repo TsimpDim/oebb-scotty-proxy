@@ -329,12 +329,37 @@ def _parse_leg(common: dict, section: dict) -> dict:
         "duration": _format_duration(journey.get("durS")),
     }
 
+
+def _contains_blacklisted_station(legs: list) -> bool:
+    """Return True if any leg's departure or arrival station is blacklisted."""
+    for leg in legs:
+        dep_station = (leg.get("departure") or {}).get("station") or ""
+        arr_station = (leg.get("arrival") or {}).get("station") or ""
+        for blacklisted in BLACKLISTED_STATIONS:
+            if blacklisted in dep_station or blacklisted in arr_station:
+                return True
+    return False
+
+
+
+def _is_valid_connection(legs: list) -> bool:
+    """Return True if the connection passes all validity checks."""
+    if not legs:
+        return False
+    if _contains_blacklisted_station(legs):
+        return False
+    return True
+
 def fetch_trips_with_scroll(requests, base_url: str, headers: dict, payload: dict, min_connections: int = 15) -> dict:
     """
     Fetch TripSearch results, paginating with scroll context until we have
     enough raw connections or no more pages.
+
+    Preserves the `common` reference table from the first response so that
+    product and location indices remain consistent across all merged connections.
     """
     all_connections = []
+    first_common = None
     last_response = None
     scroll_ctx = None
     max_pages = 6
@@ -375,13 +400,24 @@ def fetch_trips_with_scroll(requests, base_url: str, headers: dict, payload: dic
             res = svc_res[0].get("res", {})
             connections = res.get("outConL", [])
             all_connections.extend(connections)
+
+            # Capture the common reference table from the first page only.
+            # Scroll pages may have different product indices in their own
+            # common tables, which would corrupt product resolution when
+            # connections are merged.
+            if first_common is None:
+                first_common = res.get("common", {})
+
             scroll_ctx = res.get("outCtxScrB")
 
         if not scroll_ctx or len(all_connections) >= min_connections:
             break
 
     if last_response and all_connections:
-        last_response["svcResL"][0]["res"]["outConL"] = all_connections
+        res = last_response["svcResL"][0]["res"]
+        res["outConL"] = all_connections
+        if first_common:
+            res["common"] = first_common
 
     return last_response
 
@@ -416,6 +452,9 @@ def simplify_trip_response(response: dict) -> list:
                 if leg:
                     legs.append(leg)
 
+        if not _is_valid_connection(legs):
+            continue
+
         connections.append({
             "departure": _get_stop_detail_dict(common, connection.get("dep", {}), "d"),
             "arrival": _get_stop_detail_dict(common, connection.get("arr", {}), "a"),
@@ -433,6 +472,8 @@ O_BUS_6 = "O-Bus 6"
 # 1 = first class, 2 = second class, 4 = railjet, 6 = intercity
 LONG_DISTANCE_CLASSES = {1, 2, 4}
 
+# Stations that, if present in any leg, cause the entire journey to be skipped.
+BLACKLISTED_STATIONS = ["Salzburg Parsch Bahnhst", "Bregenz Bahnhof"]
 
 def _get_first_leg(connection: dict) -> dict | None:
     legs = connection.get("legs", [])
