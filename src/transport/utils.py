@@ -510,10 +510,20 @@ def simplify_trip_response(response: dict) -> list:
         if not _is_valid_connection(legs):
             continue
 
+        departure = _get_stop_detail_dict(common, connection.get("dep", {}), "d")
+        arrival = _get_stop_detail_dict(common, connection.get("arr", {}), "a")
+        changes = connection.get("chg")
+
+        leg_count = len(legs)
+        legs = _trim_trailing_transit(legs)
+        if len(legs) != leg_count:
+            arrival = legs[-1]["arrival"]
+            changes = len(legs) - 1
+
         connections.append({
-            "departure": _get_stop_detail_dict(common, connection.get("dep", {}), "d"),
-            "arrival": _get_stop_detail_dict(common, connection.get("arr", {}), "a"),
-            "changes": connection.get("chg"),
+            "departure": departure,
+            "arrival": arrival,
+            "changes": changes,
             "legs": legs,
         })
 
@@ -526,6 +536,11 @@ O_BUS_6 = "O-Bus 6"
 
 # 1 = first class, 2 = second class, 4 = railjet, 6 = intercity
 LONG_DISTANCE_CLASSES = {1, 2, 4}
+
+# City-transit modes (bus/trolleybus, metro, tram) used only for last-mile
+# transfers. Dropped from the tail of a connection: ending at Westbahnhof or
+# Hbf is equally acceptable, so the intra-city transfer leg is noise.
+CITY_TRANSIT_CLASSES = {64, 128, 256, 512}
 
 # Stations that, if present in any leg, cause the entire journey to be skipped.
 BLACKLISTED_STATIONS = ["Salzburg Parsch Bahnhst", "Bregenz Bahnhof"]
@@ -547,6 +562,13 @@ def _leg_is_train(connection: dict) -> dict | None:
         if leg.get("cls") in LONG_DISTANCE_CLASSES:
             return leg
     return legs[-1] if legs else None
+
+
+def _trim_trailing_transit(legs: list) -> list:
+    """Drop trailing city-transit legs, keeping at least one leg."""
+    while len(legs) > 1 and legs[-1].get("cls") in CITY_TRANSIT_CLASSES:
+        legs.pop()
+    return legs
 
 
 def _connection_starts_from(connection: dict, station_fragment: str) -> bool:
