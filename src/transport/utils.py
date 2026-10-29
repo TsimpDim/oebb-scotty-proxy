@@ -1,5 +1,11 @@
-from transport.scotty import BASE_PAYLOAD, STATIONS
 import re
+
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+from transport.scotty import BASE_PAYLOAD, STATIONS, HEADERS
+
 
 def get_payload(station_id: str, station_name: str) -> dict:
     """
@@ -358,7 +364,7 @@ def fetch_trips_with_scroll(requests, base_url: str, headers: dict, payload: dic
             )
 
         api_payload = {k: v for k, v in payload.items() if not k.startswith("_")}
-        data = requests.post(base_url, json=api_payload, headers=headers, timeout=10)
+        data = requests.post(base_url, json=api_payload, headers=headers, timeout=(5, 30))
         if data.status_code != 200:
             break
 
@@ -589,3 +595,17 @@ def fetch_vienna_journeys(requests, base_url: str, headers: dict, search_date: s
         return []
 
     return refine_connections(connections, reference_minutes)
+
+
+def make_retrying_session() -> requests.Session:
+    """Build a requests.Session with OEBB headers that retries transient failures."""
+    session = requests.Session()
+    session.headers.update(HEADERS)
+    retry = Retry(
+        total=3,
+        backoff_factor=1,
+        status_forcelist=(500, 502, 503, 504),
+        allowed_methods=frozenset(["POST"]),
+    )
+    session.mount("https://", HTTPAdapter(max_retries=retry))
+    return session

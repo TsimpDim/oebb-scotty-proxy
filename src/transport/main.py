@@ -1,8 +1,7 @@
 from fastapi import FastAPI
-import requests as r
 from datetime import datetime
 from transport.scotty import STATIONS, BASE_URL, HEADERS
-from transport.utils import get_payload, simplify_response, fetch_vienna_journeys, filter_journeys_by_window
+from transport.utils import get_payload, simplify_response, fetch_vienna_journeys, filter_journeys_by_window, make_retrying_session
 from fastapi import Depends
 from transport.auth import handle_api_key
 from transport.db import get_journeys
@@ -11,9 +10,8 @@ app = FastAPI(dependencies=[
     Depends(handle_api_key),
 ])
 
-# Reuse a single session for connection pooling across requests.
-_session = r.Session()
-_session.headers.update(HEADERS)
+# Reuse a single session for connection pooling and retries across requests.
+_session = make_retrying_session()
 
 _REQUEST_TIMEOUT = 10
 

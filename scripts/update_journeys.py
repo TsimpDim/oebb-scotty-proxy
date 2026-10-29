@@ -2,7 +2,7 @@
 """Cron job: fetch upcoming journeys to Vienna and store them in SQLite.
 
 Usage:
-    python scripts/update_journeys.py
+    .venv/bin/python scripts/update_journeys.py
 """
 
 import sys
@@ -11,13 +11,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-import requests
-
 from transport.db import init_db, upsert_journeys
 from transport.scotty import BASE_URL, HEADERS
-from transport.utils import fetch_vienna_journeys
-
-REQUEST_TIMEOUT = 10
+from transport.utils import fetch_vienna_journeys, make_retrying_session
 
 
 def main() -> None:
@@ -27,10 +23,9 @@ def main() -> None:
     search_date = now.strftime("%Y%m%d")
     search_time = now.strftime("%H%M%S")
 
-    session = requests.Session()
-    session.headers.update(HEADERS)
-
-    journeys = fetch_vienna_journeys(session, BASE_URL, HEADERS, search_date, search_time)
+    journeys = fetch_vienna_journeys(
+        make_retrying_session(), BASE_URL, HEADERS, search_date, search_time
+    )
     if not journeys:
         print("No journeys fetched", file=sys.stderr)
         sys.exit(1)
@@ -45,4 +40,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
