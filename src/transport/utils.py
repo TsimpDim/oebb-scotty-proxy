@@ -569,6 +569,14 @@ def refine_connections(connections: list, reference_minutes: int | None = None) 
     # Filter out connections starting from Salzburg Parsch Bahnhst
     filtered = [c for c in connections if not _connection_starts_from(c, SALZBURG_PARSCH)]
 
+    # Filter out connections that departed more than 60 minutes ago
+    if reference_minutes is not None:
+        filtered = [
+            c for c in filtered
+            if _departure_minutes(c) is None
+            or _departure_minutes(c) >= reference_minutes - 60
+        ]
+
     seen = set()
     deduped = []
     for connection in filtered:

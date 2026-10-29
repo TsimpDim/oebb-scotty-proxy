@@ -7,6 +7,7 @@ Usage:
 
 import sys
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -19,7 +20,8 @@ from transport.utils import fetch_vienna_journeys, filter_journeys_by_window, ma
 def main() -> None:
     init_db()
 
-    now = datetime.now()
+    austria_tz = ZoneInfo("Europe/Vienna")
+    now = datetime.now(tz=austria_tz)
     search_date = now.strftime("%Y%m%d")
     search_time = now.strftime("%H%M%S")
 
