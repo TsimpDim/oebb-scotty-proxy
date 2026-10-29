@@ -350,21 +350,65 @@ def _is_valid_connection(legs: list) -> bool:
         return False
     return True
 
-def fetch_trips_with_scroll(requests, base_url: str, headers: dict, payload: dict, min_connections: int = 15) -> dict:
-    """
-    Fetch TripSearch results, paginating with scroll context until we have
-    enough raw connections or no more pages.
+def _connection_signature(connection: dict) -> tuple:
+    """Return a stable identity for a connection so page overlaps can be deduped."""
+    legs = tuple(
+        (
+            (leg.get("departure") or {}).get("planned_time"),
+            (leg.get("arrival") or {}).get("planned_time"),
+            leg.get("line"),
+        )
+        for leg in connection.get("legs", [])
+    )
+    return (
+        (connection.get("departure") or {}).get("planned_time"),
+        (connection.get("arrival") or {}).get("planned_time"),
+        connection.get("changes"),
+        legs,
+    )
 
-    Preserves the `common` reference table from the first response so that
-    product and location indices remain consistent across all merged connections.
+
+def _minutes_ahead(connection: dict, reference_minutes: int) -> int | None:
+    """Minutes from the reference time to this connection's departure.
+
+    Departures within the last hour are treated as slightly negative (still
+    catchable); anything earlier is rolled forward to the next day.
     """
-    all_connections = []
-    first_common = None
-    last_response = None
+    departure = _departure_minutes(connection)
+    if departure is None:
+        return None
+    ahead = departure - reference_minutes
+    if ahead < -60:
+        ahead += 24 * 60
+    return ahead
+
+
+def fetch_trips_with_scroll(
+    requests,
+    base_url: str,
+    headers: dict,
+    payload: dict,
+    *,
+    reference_minutes: int | None = None,
+    max_hours: float = 4.0,
+    max_pages: int = 12,
+    max_connections: int = 200,
+) -> list:
+    """
+    Fetch TripSearch results forward in time, paginating with the forward
+    scroll context until connections cover roughly `max_hours` ahead of
+    `reference_minutes`, or until `max_pages` / `max_connections` is hit.
+
+    Each page is parsed against its own `common` reference table, so product
+    and location indices always resolve correctly across pages.
+
+    Returns:
+        list: Simplified connection dicts across all fetched pages.
+    """
+    all_connections: list = []
+    seen: set = set()
     scroll_ctx = None
-    max_pages = 6
 
-    # Preserve internal keys for use in scroll requests
     meta = {
         "origin_extid": payload.get("_origin_extid"),
         "origin_name": payload.get("_origin_name"),
@@ -374,7 +418,9 @@ def fetch_trips_with_scroll(requests, base_url: str, headers: dict, payload: dic
         "time": payload.get("_time"),
     }
 
-    for page in range(max_pages):
+    target_ahead = int(max_hours * 60)
+
+    for _page in range(max_pages):
         if scroll_ctx:
             payload = get_scroll_payload(
                 meta["origin_extid"],
@@ -394,32 +440,41 @@ def fetch_trips_with_scroll(requests, base_url: str, headers: dict, payload: dic
             break
 
         response = data.json()
-        last_response = response
         svc_res = response.get("svcResL", [])
-        if svc_res:
-            res = svc_res[0].get("res", {})
-            connections = res.get("outConL", [])
-            all_connections.extend(connections)
-
-            # Capture the common reference table from the first page only.
-            # Scroll pages may have different product indices in their own
-            # common tables, which would corrupt product resolution when
-            # connections are merged.
-            if first_common is None:
-                first_common = res.get("common", {})
-
-            scroll_ctx = res.get("outCtxScrB")
-
-        if not scroll_ctx or len(all_connections) >= min_connections:
+        if not svc_res or svc_res[0].get("err") != "OK":
             break
 
-    if last_response and all_connections:
-        res = last_response["svcResL"][0]["res"]
-        res["outConL"] = all_connections
-        if first_common:
-            res["common"] = first_common
+        res = svc_res[0].get("res", {})
 
-    return last_response
+        for connection in simplify_trip_response(response):
+            signature = _connection_signature(connection)
+            if signature in seen:
+                continue
+            seen.add(signature)
+            all_connections.append(connection)
+            if len(all_connections) >= max_connections:
+                break
+
+        if len(all_connections) >= max_connections:
+            break
+
+        if reference_minutes is not None:
+            max_ahead = max(
+                (
+                    ahead
+                    for c in all_connections
+                    if (ahead := _minutes_ahead(c, reference_minutes)) is not None
+                ),
+                default=None,
+            )
+            if max_ahead is not None and max_ahead >= target_ahead:
+                break
+
+        scroll_ctx = res.get("outCtxScrF")
+        if not scroll_ctx:
+            break
+
+    return all_connections
 
 
 def simplify_trip_response(response: dict) -> list:
@@ -603,11 +658,14 @@ def refine_connections(connections: list, reference_minutes: int | None = None) 
     return sorted(deduped, key=sort_key)
 
 
-def fetch_vienna_journeys(requests, base_url: str, headers: dict, search_date: str, search_time: str) -> list:
+def fetch_vienna_journeys(
+    requests, base_url: str, headers: dict, search_date: str, search_time: str, max_hours: float = 4.0
+) -> list:
     """
     Fetch and refine upcoming journeys from Salzburg Volksgarten to Wien Hbf.
 
-    Returns a list of simplified connections, or an empty list on failure.
+    Returns a list of simplified connections spanning roughly `max_hours` into
+    the future, or an empty list on failure.
     """
     origin = STATIONS.get("591161")
     destination = STATIONS.get("8103000")
@@ -629,20 +687,16 @@ def fetch_vienna_journeys(requests, base_url: str, headers: dict, search_date: s
     payload["_date"] = search_date
     payload["_time"] = search_time
 
-    response = fetch_trips_with_scroll(requests, base_url, headers, payload, min_connections=100)
-    if not response or response.get("err") != "OK":
-        return []
-    svc_res = response.get("svcResL", [{}])[0]
-    if svc_res.get("err") != "OK":
-        return []
-
-    connections = []
-    for connection in simplify_trip_response(response):
-        connection["destination"] = destination["name"]
-        connections.append(connection)
-
+    connections = fetch_trips_with_scroll(
+        requests, base_url, headers, payload,
+        reference_minutes=reference_minutes,
+        max_hours=max_hours,
+    )
     if not connections:
         return []
+
+    for connection in connections:
+        connection["destination"] = destination["name"]
 
     return refine_connections(connections, reference_minutes)
 
