@@ -35,7 +35,7 @@ payload = {
                 "numF": 5,
                 "maxChg": 3,
                 "minChgTime": 0,
-                "jnyFltrL": [{"type": "PROD", "mode": "INC", "value": "1023"}],
+                "jnyFltrL": [{"type": "PROD", "mode": "INC", "value": "65535"}],
                 "getPasslist": True,
                 "getPolyline": False,
                 "getPT": True,

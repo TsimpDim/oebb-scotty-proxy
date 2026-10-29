@@ -142,7 +142,7 @@ def _build_tripsearch_payload(
         "outFrwd": True,
         "numF": num_journeys,
         "maxChg": max_changes,
-        "jnyFltrL": [{"type": "PROD", "mode": "INC", "value": "1023"}],
+        "jnyFltrL": [{"type": "PROD", "mode": "INC", "value": "65535"}],
         "getPasslist": False,
         "getPolyline": False,
         "getPT": True,
