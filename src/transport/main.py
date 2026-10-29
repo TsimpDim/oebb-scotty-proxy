@@ -53,9 +53,9 @@ def read_station(station_id: str):
     return simplify_response(data.json())
 
 @app.get("/journeys/vienna")
-def read_journeys_vienna(from_time: str | None = None):
+def read_journeys_vienna(fromTime: str | None = None):
     stored = get_journeys()
     if stored is None:
         return {"error": "No journeys available yet."}
-    ref_minutes = _utc_time_to_austria_minutes(from_time) if from_time else _now_austria_minutes()
+    ref_minutes = _utc_time_to_austria_minutes(fromTime) if fromTime else _now_austria_minutes()
     return filter_journeys_by_window(stored["data"], ref_minutes)
