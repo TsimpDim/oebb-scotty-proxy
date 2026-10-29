@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from transport.db import init_db, upsert_journeys
 from transport.scotty import BASE_URL, HEADERS
-from transport.utils import fetch_vienna_journeys, make_retrying_session
+from transport.utils import fetch_vienna_journeys, filter_journeys_by_window, make_retrying_session
 
 
 def main() -> None:

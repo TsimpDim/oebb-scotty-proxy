@@ -384,7 +384,7 @@ def fetch_trips_with_scroll(requests, base_url: str, headers: dict, payload: dic
                 scroll_ctx=scroll_ctx,
                 date=meta["date"],
                 time=meta["time"],
-                num_journeys=30,
+                num_journeys=50,
                 max_changes=2,
             )
 
@@ -612,6 +612,7 @@ def fetch_vienna_journeys(requests, base_url: str, headers: dict, search_date: s
         origin["extId"], origin["name"],
         destination["extId"], destination["name"],
         search_date, search_time,
+        num_journeys=100,
     )
     payload["_origin_extid"] = origin["extId"]
     payload["_origin_name"] = origin["name"]
@@ -620,7 +621,7 @@ def fetch_vienna_journeys(requests, base_url: str, headers: dict, search_date: s
     payload["_date"] = search_date
     payload["_time"] = search_time
 
-    response = fetch_trips_with_scroll(requests, base_url, headers, payload, min_connections=30)
+    response = fetch_trips_with_scroll(requests, base_url, headers, payload, min_connections=100)
     if not response or response.get("err") != "OK":
         return []
     svc_res = response.get("svcResL", [{}])[0]
